@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>オンライン ito風カードゲーム</title>
+<style>
+  body {
+    font-family: system-ui, sans-serif;
+    background: #111;
+    color: #eee;
+    text-align: center;
+  }
+  header {
+    padding: 10px 0;
+    background: linear-gradient(90deg, #ff7b7b, #ffd56b);
+    color: #222;
+    font-weight: bold;
+    margin-bottom: 20px;
+  }
+  .panel {
+    background: #1c1c1c;
+    border-radius: 12px;
+    padding: 15px;
+    margin: 10px auto;
+    max-width: 700px;
+    box-shadow: 0 0 10px #000;
+  }
+  input, select, button {
+    padding: 6px 10px;
+    margin: 4px;
+    border-radius: 6px;
+    border: none;
+    outline: none;
+  }
+  input, select {
+    background: #222;
+    color: #eee;
+  }
+  button {
+    background: #ff7b7b;
+    color: #222;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  button:hover {
+    background: #ffd56b;
+  }
+  .card {
+    width: 70px;
+    height: 100px;
+    border-radius: 10px;
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 26px;
+    margin: 6px;
+    background: #444;
+    color: #fff;
+    box-shadow: 0 0 5px #000;
+  }
+  .card.revealed {
+    background: #fff;
+    color: #000;
+  }
+  .submit-list span {
+    display: inline-block;
+    margin: 4px 6px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: #333;
+    font-size: 14px;
+  }
+  .card-img-small {
+    width: 40px;
+    height: auto;
+    vertical-align: middle;
+    margin-right: 6px;
+    border-radius: 6px;
+    box-shadow: 0 0 4px #000;
+  }
+
+  /* スマホ向けUI */
+  @media (max-width: 600px) {
+    body {
+      font-size: 18px;
+      padding: 0 10px;
+    }
+    header {
+      font-size: 20px;
+      padding: 12px 0;
+    }
+    .panel {
+      padding: 12px;
+      margin: 10px 0;
+      border-radius: 14px;
+    }
+    input, select, button {
+      width: 100%;
+      font-size: 18px;
+      padding: 12px;
+      margin: 8px 0;
+    }
+    .submit-list span {
+      font-size: 16px;
+      padding: 6px 10px;
+    }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  オンライン ito風カードゲーム（Firebase版）
+</header>
+
+<div class="panel" id="roomPanel">
+  <h2>部屋設定</h2>
+  <p>
+    部屋ID：
+    <input id="roomId" placeholder="例：ito123">
+  </p>
+  <p>
+    あなたの名前：
+    <input id="playerName" placeholder="例：颯心">
+  </p>
+  <p>
+    人数：
+    <select id="players">
+      <option value="2">2人</option>
+      <option value="3">3人</option>
+      <option value="4" selected>4人</option>
+    </select>
+  </p>
+  <button id="joinBtn">部屋に参加</button>
+  <button id="dealBtn" disabled>カードを配る（ホスト用）</button>
+</div>
+
+<div class="panel" id="infoPanel">
+  <h2>状態</h2>
+  <div id="status">部屋に参加していません</div>
+</div>
+
+<div class="panel" id="handsPanel">
+  <h2>手札</h2>
+  <div id="handsView"></div>
+  <div id="handCards"></div>
+</div>
+
+<div class="panel" id="submitPanel">
+  <h2>提出</h2>
+  <div id="submitButtons"></div>
+  <div class="submit-list" id="submitList"></div>
+</div>
+
+<div class="panel" id="resultPanel">
+  <h2>結果</h2>
+  <div id="resultCards"></div>
+  <div id="finalResult"></div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import {
+  getDatabase, ref, set, get, onValue, update
+} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyColJ0aGlJCzAFUWiFunUgSPHePjJrEejY",
+  authDomain: "ito-game-2aa3f.firebaseapp.com",
+  databaseURL: "https://ito-game-2aa3f-default-rtdb.firebaseio.com",
+  projectId: "ito-game-2aa3f",
+  storageBucket: "ito-game-2aa3f.firebasestorage.app",
+  messagingSenderId: "952356171352",
+  appId: "1:952356171352:web:72d2df8f89347a0f3ae42d"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+let roomId = "";
+let playerName = "";
+let playerIndex = null;
+let playersCount = 4;
+let hands = [];
+let submitOrder = [];
+let phase = "waiting";
+
+const joinBtn = document.getElementById("joinBtn");
+const dealBtn = document.getElementById("dealBtn");
+const statusEl = document.getElementById("status");
+const handsView = document.getElementById("handsView");
+const handCards = document.getElementById("handCards");
+const submitButtons = document.getElementById("submitButtons");
+const submitList = document.getElementById("submitList");
+const resultCards = document.getElementById("resultCards");
+const finalResult = document.getElementById("finalResult");
+
+const roomPanel = document.getElementById("roomPanel");
+const infoPanel = document.getElementById("infoPanel");
+const handsPanel = document.getElementById("handsPanel");
+const submitPanel = document.getElementById("submitPanel");
+const resultPanel = document.getElementById("resultPanel");
+
+function setPhaseView(p) {
+  roomPanel.style.display = "none";
+  infoPanel.style.display = "none";
+  handsPanel.style.display = "none";
+  submitPanel.style.display = "none";
+  resultPanel.style.display = "none";
+
+  if (p === "waiting") {
+    roomPanel.style.display = "block";
+    infoPanel.style.display = "block";
+  }
+
+  if (p === "playing") {
+    handsPanel.style.display = "block";
+    submitPanel.style.display = "block";
+    handsPanel.scrollIntoView({ behavior: "smooth" });
+  }
+
+  if (p === "result") {
+    resultPanel.style.display = "block";
+    resultPanel.scrollIntoView({ behavior: "smooth" });
+  }
+}
+
+joinBtn.onclick = async () => {
+  roomId = document.getElementById("roomId").value.trim();
+  playerName = document.getElementById("playerName").value.trim();
+  playersCount = Number(document.getElementById("players").value);
+
+  if (!roomId || !playerName) {
+    alert("部屋IDと名前を入力してね");
+    return;
+  }
+
+  const roomRef = ref(db, `rooms/${roomId}`);
+  const snap = await get(roomRef);
+  let data = snap.val();
+
+  if (!data) {
+    data = {
+      playersCount,
+      players: [playerName],
+      hands: [],
+      submitOrder: [],
+      phase: "waiting"
+    };
+    await set(roomRef, data);
+    playerIndex = 0;
+    dealBtn.disabled = false;
+    statusEl.textContent = `部屋を作成しました（ホスト）: ${roomId}`;
+  } else {
+    if (data.players && data.players.length >= data.playersCount) {
+      alert("この部屋は満員です");
+      return;
+    }
+    playerIndex = data.players.length;
+    const newPlayers = data.players;
+    newPlayers.push(playerName);
+    await update(roomRef, { players: newPlayers });
+    statusEl.textContent = `部屋に参加しました: ${roomId} / あなたはプレイヤー${playerIndex + 1}`;
+    dealBtn.disabled = true;
+  }
+
+  setupRoomListener(roomId);
+};
+
+function setupRoomListener(roomId) {
+  const roomRef = ref(db, `rooms/${roomId}`);
+  onValue(roomRef, (snapshot) => {
+    const data = snapshot.val();
+    if (!data) return;
+
+    playersCount = data.playersCount;
+    hands = data.hands || [];
+    submitOrder = data.submitOrder || [];
+    phase = data.phase || "waiting";
+
+    renderHands();
+    renderSubmitButtons();
+    renderSubmitList();
+    setPhaseView(phase);
+
+    if (phase === "result") {
+      if (resultCards.innerHTML === "") {
+        revealResult();
+      }
+    }
+  });
+}
+
+dealBtn.onclick = async () => {
+  const roomRef = ref(db, `rooms/${roomId}`);
+  const snap = await get(roomRef);
+  const data = snap.val();
+
+  if (!data || data.players.length !== data.playersCount) {
+    alert("全員が部屋に入ってから配ってね");
+    return;
+  }
+
+  let pool = [];
+  for (let i = 1; i <= 100; i++) pool.push(i);
+  shuffle(pool);
+
+  const newHands = [];
+  for (let i = 0; i < data.playersCount; i++) {
+    newHands.push([pool[i * 2], pool[i * 2 + 1]]);
+  }
+
+  await update(roomRef, {
+    hands: newHands,
+    submitOrder: [],
+    phase: "playing"
+  });
+
+  statusEl.textContent = "カードを配りました";
+};
+
+function shuffle(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+}
+
+function renderHands() {
+  handsView.innerHTML = "";
+  handCards.innerHTML = "";
+
+  if (playerIndex === null || !hands[playerIndex]) {
+    handsView.textContent = "まだ手札がありません";
+    return;
+  }
+
+  const cards = hands[playerIndex];
+  handsView.innerHTML = `<p>あなたの手札（${playerName}）</p>`;
+
+  cards.forEach((num) => {
+    if (num !== null) {
+      const div = document.createElement("div");
+      div.className = "card";
+      div.textContent = num;
+      handCards.appendChild(div);
+    }
+  });
+}
+
+function renderSubmitButtons() {
+  submitButtons.innerHTML = "";
+  if (playerIndex === null || !hands[playerIndex]) return;
+
+  const cards = hands[playerIndex];
+  submitButtons.innerHTML = `<p>小さいと思う順に提出してね</p>`;
+
+  cards.forEach((card, idx) => {
+    if (card !== null) {
+      const btn = document.createElement("button");
+      btn.textContent = `カード${idx + 1}を提出`;
+      btn.onclick = () => submitCard(idx);
+      submitButtons.appendChild(btn);
+    }
+  });
+}
+
+async function submitCard(index) {
+  const roomRef = ref(db, `rooms/${roomId}`);
+  const snap = await get(roomRef);
+  const data = snap.val();
+  if (!data) return;
+
+  const myCards = data.hands[playerIndex];
+  const cardValue = myCards[index];
+  if (cardValue === null) return;
+
+  const newHands = data.hands;
+  newHands[playerIndex][index] = null;
+
+  const newSubmit = data.submitOrder || [];
+  newSubmit.push({
+    value: cardValue,
+    player: playerName
+  });
+
+  const updates = {
+    hands: newHands,
+    submitOrder: newSubmit
+  };
+
+  if (newSubmit.length === data.playersCount * 2) {
+    updates.phase = "result";
+  }
+
+  await update(roomRef, updates);
+}
+
+function renderSubmitList() {
+  submitList.innerHTML = "";
+  if (!submitOrder.length) {
+    submitList.textContent = "まだ提出はありません";
+    return;
+  }
+
+  submitOrder.forEach((item, i) => {
+    const span = document.createElement("span");
+    span.innerHTML = `
+      <img src="cards/card_back.svg" class="card-img-small">
+      ${i + 1}番目: ${item.player} がカードを提出
+    `;
+    submitList.appendChild(span);
+  });
+}
+
+async function revealResult() {
+  resultCards.innerHTML = "";
+  finalResult.innerHTML = "";
+
+  for (let i = 0; i < submitOrder.length; i++) {
+    const div = document.createElement("div");
+    div.className = "card";
+    div.textContent = "？";
+    resultCards.appendChild(div);
+
+    await new Promise(r => setTimeout(r, 600));
+
+    div.classList.add("revealed");
+    div.textContent = submitOrder[i].value;
+  }
+
+  let ok = true;
+  for (let i = 0; i < submitOrder.length - 1; i++) {
+    if (submitOrder[i].value > submitOrder[i + 1].value) ok = false;
+  }
+
+  finalResult.innerHTML = ok
+    ? "<h3 style='color:#7bff7b'>正解！昇順になっています</h3>"
+    : "<h3 style='color:#ff7b7b'>不正解！どこかで順番が崩れています</h3>";
+
+  setTimeout(async () => {
+    const roomRef = ref(db, `rooms/${roomId}`);
+    await update(roomRef, {
+      submitOrder: [],
+      phase: "waiting"
+    });
+  }, 5000);
+}
+</script>
+
+</body>
+</html>
